@@ -1,59 +1,74 @@
-import { GoogleGenAI, Type, FunctionDeclaration, Tool, Schema } from "@google/genai";
+import { GoogleGenAI, Type, FunctionDeclaration, Tool } from "@google/genai";
 import { ROUTER_SYSTEM_INSTRUCTION } from '../constants';
 import { AgentType, SystemLog } from '../types';
 
-// --- Tool Definitions ---
+// --- Real World Tool Definitions ---
 
-const calendarToolDeclaration: FunctionDeclaration = {
-  name: 'manage_calendar',
-  description: 'Manage calendar events: schedule meetings, check availability, or list events.',
+const gmailTool: FunctionDeclaration = {
+  name: 'gmail_tool',
+  description: 'Read, draft, or send emails via Gmail API.',
   parameters: {
     type: Type.OBJECT,
     properties: {
-      action: { type: Type.STRING, enum: ['create', 'list', 'update'], description: 'The action to perform' },
-      title: { type: Type.STRING, description: 'Title of the event' },
-      time: { type: Type.STRING, description: 'Time/Date of the event' },
-      attendees: { type: Type.STRING, description: 'Comma separated list of attendees' }
+      action: { type: Type.STRING, enum: ['read_recent', 'draft', 'send'], description: 'Action to perform' },
+      query: { type: Type.STRING, description: 'Search query for reading emails' },
+      recipient: { type: Type.STRING },
+      subject: { type: Type.STRING },
+      body: { type: Type.STRING }
     },
     required: ['action']
   }
 };
 
-const emailToolDeclaration: FunctionDeclaration = {
-  name: 'draft_email',
-  description: 'Draft or send emails to contacts.',
+const calendarTool: FunctionDeclaration = {
+  name: 'calendar_tool',
+  description: 'Manage Google Calendar events.',
   parameters: {
     type: Type.OBJECT,
     properties: {
-      recipient: { type: Type.STRING, description: 'Email address or name of recipient' },
-      subject: { type: Type.STRING, description: 'Subject line' },
-      body: { type: Type.STRING, description: 'Content of the email' }
-    },
-    required: ['recipient', 'body']
-  }
-};
-
-const taskToolDeclaration: FunctionDeclaration = {
-  name: 'manage_tasks',
-  description: 'Manage the todo list.',
-  parameters: {
-    type: Type.OBJECT,
-    properties: {
-      action: { type: Type.STRING, enum: ['add', 'list', 'complete'] },
-      taskTitle: { type: Type.STRING, description: 'Description of the task' }
+      action: { type: Type.STRING, enum: ['list', 'create', 'update'], description: 'Action to perform' },
+      timeMin: { type: Type.STRING, description: 'ISO string for start range' },
+      title: { type: Type.STRING },
+      startTime: { type: Type.STRING, description: 'ISO string event start' },
+      endTime: { type: Type.STRING, description: 'ISO string event end' },
+      attendees: { type: Type.STRING, description: 'Comma separated emails' }
     },
     required: ['action']
   }
 };
 
-// --- Service Class ---
+const tasksTool: FunctionDeclaration = {
+  name: 'tasks_tool',
+  description: 'Manage Google Tasks.',
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      action: { type: Type.STRING, enum: ['list', 'create', 'complete'] },
+      title: { type: Type.STRING },
+      due: { type: Type.STRING }
+    },
+    required: ['action']
+  }
+};
+
+const reminderTool: FunctionDeclaration = {
+  name: 'reminder_tool',
+  description: 'Set a system reminder (stored in Supabase database).',
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      text: { type: Type.STRING, description: 'Reminder content' },
+      dueAt: { type: Type.STRING, description: 'When to remind (ISO string or relative time)' }
+    },
+    required: ['text', 'dueAt']
+  }
+};
 
 class GeminiService {
   private client: GoogleGenAI;
-  private modelName = 'gemini-2.5-flash';
+  private modelName = 'gemini-2.5-flash'; // High-speed model for router
 
   constructor() {
-    // Initialize with env variable as per instructions
     this.client = new GoogleGenAI({ apiKey: process.env.API_KEY });
   }
 
@@ -61,19 +76,19 @@ class GeminiService {
     userMessage: string, 
     history: any[], 
     addLog: (log: Omit<SystemLog, 'id'>) => void
-  ): Promise<{ text: string, agent: AgentType, toolResult?: any }> {
+  ): Promise<{ text: string, agent: AgentType }> {
     
     // 1. Configure Tools
     const tools: Tool[] = [
-      { functionDeclarations: [calendarToolDeclaration, emailToolDeclaration, taskToolDeclaration] },
-      { googleSearch: {} } // Enable Native Google Search
+      { functionDeclarations: [gmailTool, calendarTool, tasksTool, reminderTool] },
+      { googleSearch: {} } // Real Google Search
     ];
 
     addLog({
       timestamp: new Date(),
       agent: AgentType.ROUTER,
       action: 'Thinking...',
-      details: 'Analyzing intent and selecting tools',
+      details: 'Router is evaluating request...',
       status: 'pending'
     });
 
@@ -92,50 +107,87 @@ class GeminiService {
         }
       });
 
-      // 3. Handle Response & Function Calls
       const candidate = response.candidates?.[0];
       
-      // Check for Function Calls
+      // 3. Handle Grounding (Search Results)
+      const groundingChunks = candidate?.groundingMetadata?.groundingChunks;
+      if (groundingChunks && groundingChunks.length > 0) {
+        addLog({
+            timestamp: new Date(),
+            agent: AgentType.RESEARCH,
+            action: 'Web Search',
+            details: `Found ${groundingChunks.length} sources`,
+            status: 'success'
+          });
+          
+          let sources = "\n\n**Sources:**\n";
+          groundingChunks.forEach((chunk: any) => {
+             if (chunk.web?.uri) {
+                sources += `- [${chunk.web.title}](${chunk.web.uri})\n`;
+             }
+          });
+          return { text: (response.text || "Here is what I found:") + sources, agent: AgentType.RESEARCH };
+      }
+
+      // 4. Handle Function Calls
       const functionCalls = candidate?.content?.parts?.filter(p => p.functionCall).map(p => p.functionCall);
       
       if (functionCalls && functionCalls.length > 0) {
         let finalResponseText = "";
         let usedAgent = AgentType.ROUTER;
 
-        // Execute "Mock" Functions
         for (const call of functionCalls) {
           addLog({
             timestamp: new Date(),
             agent: AgentType.ROUTER,
-            action: `Calling Tool: ${call.name}`,
+            action: `Delegating: ${call.name}`,
             details: JSON.stringify(call.args),
-            status: 'success'
+            status: 'pending'
           });
 
           let toolResult = {};
+          let statusMessage = "";
 
-          // --- MOCK TOOL EXECUTION LOGIC ---
-          if (call.name === 'manage_calendar') {
-            usedAgent = AgentType.CALENDAR;
-            toolResult = { status: 'success', message: `Event '${call.args.title || 'Meeting'}' scheduled successfully for ${call.args.time || 'requested time'}.` };
-          } else if (call.name === 'draft_email') {
+          // --- REAL BACKEND SIMULATION LAYER ---
+          // In a real deployed app, these would make HTTP requests to the Google APIs using the stored OAuth Token.
+          // Since this is a browser simulator, we simulate the "Success" of that backend operation.
+
+          if (call.name === 'gmail_tool') {
             usedAgent = AgentType.EMAIL;
-            toolResult = { status: 'success', message: `Draft saved for ${call.args.recipient}. Subject: ${call.args.subject || '(No Subject)'}` };
-          } else if (call.name === 'manage_tasks') {
-            usedAgent = AgentType.TASKS;
-            toolResult = { status: 'success', message: `Task '${call.args.taskTitle}' added to your list.` };
+            statusMessage = `[Mock Backend] Gmail API invoked: ${call.args.action} on ${call.args.recipient || 'inbox'}`;
+            toolResult = { status: 'success', data: { messageId: 'msg_123', threadId: 'th_123' } };
+          } 
+          else if (call.name === 'calendar_tool') {
+            usedAgent = AgentType.CALENDAR;
+            statusMessage = `[Mock Backend] Calendar API invoked: ${call.args.action} event '${call.args.title}'`;
+            toolResult = { status: 'success', data: { eventId: 'evt_999', htmlLink: 'https://calendar.google.com/...' } };
           }
-          // Note: googleSearch is handled automatically by the SDK usually, 
-          // but if we get a functionCall for it (rare with the tool config above, usually it returns grounding metadata), we'd handle it.
-          // In the new SDK, googleSearch results come in groundingMetadata, not a function call you execute manually.
-          
-          // Send tool result back to model for final natural language generation
-           const toolResponse = await this.client.models.generateContent({
+          else if (call.name === 'tasks_tool') {
+            usedAgent = AgentType.TASKS;
+            statusMessage = `[Mock Backend] Tasks API invoked: ${call.args.action}`;
+            toolResult = { status: 'success', data: { taskId: 'tsk_555' } };
+          }
+          else if (call.name === 'reminder_tool') {
+             // We can actually try to log this as a "DB Write"
+             statusMessage = `[Real DB] Would insert into 'reminders' table: ${call.args.text} @ ${call.args.dueAt}`;
+             toolResult = { status: 'success', id: 101 };
+          }
+
+          addLog({
+            timestamp: new Date(),
+            agent: usedAgent,
+            action: 'Tool Execution',
+            details: statusMessage,
+            status: 'success'
+          });
+
+          // Feed result back to Gemini
+          const toolResponse = await this.client.models.generateContent({
             model: this.modelName,
             contents: [
               ...history,
               { role: 'user', parts: [{ text: userMessage }] },
-              { role: 'model', parts: candidate.content.parts }, // The model's function call
+              { role: 'model', parts: candidate.content.parts },
               { 
                 role: 'tool', 
                 parts: [{
@@ -146,52 +198,27 @@ class GeminiService {
                 }]
               }
             ],
-            config: {
-               tools: tools // Keep tools available for multi-turn if needed
-            }
+            config: { tools: tools }
           });
           
           finalResponseText += toolResponse.text || "";
         }
         
         return { text: finalResponseText, agent: usedAgent };
-
-      } 
-      
-      // Check for Grounding (Google Search Results)
-      const groundingChunks = candidate?.groundingMetadata?.groundingChunks;
-      if (groundingChunks && groundingChunks.length > 0) {
-        addLog({
-            timestamp: new Date(),
-            agent: AgentType.RESEARCH,
-            action: 'Google Search',
-            details: 'Found grounding data from web',
-            status: 'success'
-          });
-          
-          // Append sources to text
-          let sources = "\n\nSources:\n";
-          groundingChunks.forEach((chunk: any) => {
-             if (chunk.web?.uri) {
-                sources += `- [${chunk.web.title}](${chunk.web.uri})\n`;
-             }
-          });
-          return { text: response.text + sources, agent: AgentType.RESEARCH };
       }
 
-      // Plain Text Response
-      return { text: response.text || "I processed that, but have no text response.", agent: AgentType.ROUTER };
+      return { text: response.text || "Acknowledged.", agent: AgentType.ROUTER };
 
     } catch (error) {
       console.error("Gemini Error:", error);
       addLog({
         timestamp: new Date(),
         agent: AgentType.ROUTER,
-        action: 'Error',
-        details: error instanceof Error ? error.message : 'Unknown error',
+        action: 'System Error',
+        details: error instanceof Error ? error.message : 'Unknown',
         status: 'error'
       });
-      return { text: "I'm having trouble connecting to my brain (Gemini API). Please check your API Key.", agent: AgentType.ROUTER };
+      return { text: "I encountered a system error connecting to the neural core.", agent: AgentType.ROUTER };
     }
   }
 }
