@@ -1,0 +1,5 @@
+{
+  "name": "Man Friday - AI Executive Assistant",
+  "description": "A multi-agent executive assistant simulating a WhatsApp interface. Features a Router Agent delegating tasks to Email, Calendar, and Research specialists using Gemini 2.5.",
+  "requestFramePermissions": []
+}
