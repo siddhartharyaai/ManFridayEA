@@ -1,3 +1,5 @@
+"use client";
+
 import React, { useState, useRef, useEffect } from 'react';
 import { Message, AgentType } from '../types';
 import { Send, Paperclip, MoreVertical, Phone, Video, Search } from 'lucide-react';

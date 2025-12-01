@@ -66,10 +66,15 @@ const reminderTool: FunctionDeclaration = {
 
 class GeminiService {
   private client: GoogleGenAI;
-  private modelName = 'gemini-2.5-flash'; // High-speed model for router
+  private modelName = 'gemini-2.5-flash';
 
   constructor() {
-    this.client = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    // Determine the API Key based on environment (Server vs Client Simulator)
+    const apiKey = process.env.API_KEY || process.env.NEXT_PUBLIC_GEMINI_API_KEY || process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      console.warn("Gemini Service initialized without API Key. Simulator may fail.");
+    }
+    this.client = new GoogleGenAI({ apiKey: apiKey || 'dummy' });
   }
 
   async processMessage(
@@ -149,27 +154,26 @@ class GeminiService {
           let statusMessage = "";
 
           // --- REAL BACKEND SIMULATION LAYER ---
-          // In a real deployed app, these would make HTTP requests to the Google APIs using the stored OAuth Token.
-          // Since this is a browser simulator, we simulate the "Success" of that backend operation.
+          // In the Client Simulator, we mock success because we can't easily call Google APIs via REST from browser without exposing tokens.
+          // The Real Backend (app/api/webhook) handles this with actual server-side calls.
 
           if (call.name === 'gmail_tool') {
             usedAgent = AgentType.EMAIL;
-            statusMessage = `[Mock Backend] Gmail API invoked: ${call.args.action} on ${call.args.recipient || 'inbox'}`;
+            statusMessage = `[Simulator] Gmail API invoked: ${call.args.action} on ${call.args.recipient || 'inbox'}`;
             toolResult = { status: 'success', data: { messageId: 'msg_123', threadId: 'th_123' } };
           } 
           else if (call.name === 'calendar_tool') {
             usedAgent = AgentType.CALENDAR;
-            statusMessage = `[Mock Backend] Calendar API invoked: ${call.args.action} event '${call.args.title}'`;
+            statusMessage = `[Simulator] Calendar API invoked: ${call.args.action} event '${call.args.title}'`;
             toolResult = { status: 'success', data: { eventId: 'evt_999', htmlLink: 'https://calendar.google.com/...' } };
           }
           else if (call.name === 'tasks_tool') {
             usedAgent = AgentType.TASKS;
-            statusMessage = `[Mock Backend] Tasks API invoked: ${call.args.action}`;
+            statusMessage = `[Simulator] Tasks API invoked: ${call.args.action}`;
             toolResult = { status: 'success', data: { taskId: 'tsk_555' } };
           }
           else if (call.name === 'reminder_tool') {
-             // We can actually try to log this as a "DB Write"
-             statusMessage = `[Real DB] Would insert into 'reminders' table: ${call.args.text} @ ${call.args.dueAt}`;
+             statusMessage = `[Simulator] Would insert into 'reminders' table: ${call.args.text} @ ${call.args.dueAt}`;
              toolResult = { status: 'success', id: 101 };
           }
 

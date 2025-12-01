@@ -1,3 +1,5 @@
+"use client";
+
 import React, { useState } from 'react';
 import { UserState, SystemLog, AgentType } from '../types';
 import { ShieldCheck, Mail, Calendar, CheckSquare, Terminal, Activity, Wifi, Database, Cloud, Code } from 'lucide-react';

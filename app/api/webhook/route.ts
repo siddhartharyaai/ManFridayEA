@@ -128,28 +128,30 @@ export async function POST(req: NextRequest) {
       for (const call of functionCalls) {
         console.log(`Calling tool: ${call.name}`);
         let result = {};
+        // Cast args to any to handle type safety with dynamic tool arguments
+        const args = call.args as any;
 
         if (call.name === 'gmail_tool') {
-          if (call.args.action === 'read') {
-            result = await googleApi.gmail.listMessages(accessToken, call.args.query);
-          } else if (call.args.action === 'send') {
-            result = await googleApi.gmail.sendEmail(accessToken, call.args.recipient, call.args.subject, call.args.body);
+          if (args.action === 'read') {
+            result = await googleApi.gmail.listMessages(accessToken, args.query);
+          } else if (args.action === 'send') {
+            result = await googleApi.gmail.sendEmail(accessToken, args.recipient, args.subject, args.body);
           }
         } else if (call.name === 'calendar_tool') {
-           if (call.args.action === 'list') {
-            result = await googleApi.calendar.listEvents(accessToken, call.args.timeMin);
-           } else if (call.args.action === 'create') {
+           if (args.action === 'list') {
+            result = await googleApi.calendar.listEvents(accessToken, args.timeMin);
+           } else if (args.action === 'create') {
              result = await googleApi.calendar.createEvent(accessToken, {
-               summary: call.args.title,
-               start: { dateTime: call.args.startTime },
-               end: { dateTime: call.args.endTime }
+               summary: args.title,
+               start: { dateTime: args.startTime },
+               end: { dateTime: args.endTime }
              });
            }
         } else if (call.name === 'reminder_tool') {
            const { error } = await supabase.from('reminders').insert({
              user_id: user.id,
-             content: call.args.content,
-             due_at: call.args.dueAt
+             content: args.content,
+             due_at: args.dueAt
            });
            result = error ? { error: error.message } : { success: true, message: "Reminder saved." };
         }
